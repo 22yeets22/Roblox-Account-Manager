@@ -4,8 +4,10 @@ import json
 import os
 import sys
 
+from argon2 import PasswordHasher
 from cryptography.fernet import Fernet, InvalidToken
-from PyQt5 import QtCore
+from launch import launch_nonblocking
+from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -19,20 +21,34 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-from launch import launch_nonblocking
+from settings import Settings
 
 PWD_FILE = "pwd.txt"
 TOKENS_FILE = "tokens.txt"
+SETTINGS_FILE = "settings.json"
+FAQS_FILE = "faqs.json"
+
+
+ph = PasswordHasher()
 
 
 def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+    # returns a full Argon2 hash string including salt and other params
+    return ph.hash(password)
 
 
-def derive_key(password):
-    # Use SHA256 hash, then base64 encode for Fernet
-    return base64.urlsafe_b64encode(hashlib.sha256(password.encode()).digest())
+def verify_password(stored_hash, password):
+    try:
+        return ph.verify(stored_hash, password)
+    except Exception:
+        return False
+
+
+def derive_key(password, salt=b"fixed_salt"):
+    # help from gpt here
+    # Use a fixed salt stored securely or generated once
+    key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 100_000, dklen=32)  # 100k iters
+    return base64.urlsafe_b64encode(key)
 
 
 class LoginWidget(QWidget):
@@ -52,6 +68,9 @@ class LoginWidget(QWidget):
         layout.addWidget(self.pwd_input)
         layout.addWidget(self.login_btn)
         self.setLayout(layout)
+
+        # Lock the height to the default height, allow width to change
+        self.setFixedHeight(self.sizeHint().height())
 
         if self.should_set_password():
             self.label.setText("Set a new password:")
@@ -86,19 +105,110 @@ class LoginWidget(QWidget):
         with open(PWD_FILE, "r") as f:
             stored_hash = f.read().strip()
 
-        if hash_password(pwd) == stored_hash:
+        if verify_password(stored_hash, pwd):
             self.logged_in.emit(pwd)
         else:
             QMessageBox.warning(self, "Error", "Incorrect password.")
             self.pwd_input.clear()
 
 
+class FAQDialog(QWidget):
+    def __init__(self, parent):
+        super().__init__(parent, QtCore.Qt.Window)
+        self.setWindowTitle("FAQ")
+
+        self.setFixedWidth(400)
+        layout = QVBoxLayout()
+
+        try:
+            with open(FAQS_FILE, "r", encoding="utf-8") as f:
+                self.faqs = json.load(f)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not load FAQs: {e}")
+            self.close()
+            return
+
+        for entry in self.faqs:
+            question = entry.get("question", "Question")
+            answer = entry.get("answer", "Answer")
+
+            btn = QPushButton(question)
+            btn.clicked.connect(lambda _, q=question, a=answer: QMessageBox.information(self, q, a))
+            layout.addWidget(btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet("font-weight: bold;")
+        close_btn.clicked.connect(self.close)
+        layout.addWidget(close_btn)
+
+        self.setLayout(layout)
+
+    def closeEvent(self, event):
+        event.accept()
+
+
+class SettingsDialog(QWidget):
+    def __init__(self, parent, settings):
+        # Settings dialog, only use when settings are already loaded
+        super().__init__(parent, QtCore.Qt.Window)
+        self.setWindowTitle("Settings")
+        self.settings = settings
+
+        self._settings_widgets = []
+        layout = QVBoxLayout()
+
+        # Layout for label and input/checkbox
+        for key, entry in self.settings.data.items():
+            row_layout = QHBoxLayout()
+            label = QLabel(entry.get("label", "Setting"))
+            setting_type = entry.get("type", "bool")
+            if setting_type == "bool":
+                widget = QtWidgets.QCheckBox()
+                widget.setChecked(entry.get("value", False))
+            elif setting_type == "string":
+                widget = QLineEdit()
+                widget.setText(str(entry.get("value", "")))
+
+            row_layout.addWidget(label)
+            row_layout.addWidget(widget)
+            row_layout.addStretch()
+            layout.addLayout(row_layout)
+            self._settings_widgets.append((key, widget, setting_type))
+
+        save_close_btn = QPushButton("Save and Close")
+        save_close_btn.setStyleSheet("font-weight: bold;")
+        save_close_btn.clicked.connect(self.save_and_close)
+        layout.addWidget(save_close_btn)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet("font-weight: bold;")
+        cancel_btn.clicked.connect(self.close)
+        layout.addWidget(cancel_btn)
+
+        self.setLayout(layout)
+        self.setFixedWidth(400)
+
+    def save(self):
+        for key, widget, setting_type in self._settings_widgets:
+            if setting_type == "bool":
+                self.settings.data[key]["value"] = widget.isChecked()
+            elif setting_type == "string":
+                self.settings.data[key]["value"] = widget.text()
+        self.settings.save()
+
+    def save_and_close(self):
+        self.save()
+        self.close()
+
+    def closeEvent(self, event):
+        event.accept()
+
+
 class AccountManagerWidget(QWidget):
     def __init__(self, password):
         super().__init__()
         self.password = password
-        self.key = derive_key(password)
-        self.fernet = Fernet(self.key)
+        self.fernet = Fernet(derive_key(password))
         self.setWindowTitle("Roblox Account Manager")
         self.unsaved_changes = False
 
@@ -111,16 +221,20 @@ class AccountManagerWidget(QWidget):
         layout.addWidget(self.table)
         btn_layout = QHBoxLayout()
 
-        # Add clickable help button overlay top right of screen
-        # Place help button at the top right
+        # Add help and settings buttons
         help_btn = QPushButton("?")
         help_btn.setFixedSize(30, 30)
         help_btn.setToolTip("Frequently Asked Questions")
         help_btn.clicked.connect(self.show_faq)
+        settings_btn = QPushButton("⚙")
+        settings_btn.setFixedSize(30, 30)
+        settings_btn.setToolTip("Settings")
+        settings_btn.clicked.connect(self.show_settings)
 
         top_layout = QHBoxLayout()
         top_layout.addStretch()
         top_layout.addWidget(help_btn)
+        top_layout.addWidget(settings_btn)
         layout.addLayout(top_layout)
 
         # Buttons at the bottom of the screen
@@ -146,57 +260,68 @@ class AccountManagerWidget(QWidget):
         self.table.model().rowsInserted.connect(self.mark_unsaved)
         self.table.model().rowsRemoved.connect(self.mark_unsaved)
 
-        # Faq dialog tracker
-        self.faq_dialog = None
+        # Context menu for the table (insert and delete)
+        self.table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.show_context_menu)
 
-    def mark_unsaved(self, *args, **kwargs):
-        self.unsaved_changes = True
+        # Settings and FAQ dialogs
+        self.faq_dialog = None
+        self.settings_dialog = None
+
+        self.settings = Settings(SETTINGS_FILE)
+        self.settings.load()
 
     def show_faq(self):
         if self.faq_dialog is not None and self.faq_dialog.isVisible():
             self.faq_dialog.raise_()
             self.faq_dialog.activateWindow()
             return
-
-        # Loading from faqs.json (still a test rn)
-        try:
-            with open("faqs.json", "r", encoding="utf-8") as f:
-                faqs = json.load(f)
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Could not load FAQs: {e}")
-            return
-
-        self.faq_dialog = QWidget(self, QtCore.Qt.Window)
-        self.faq_dialog.setWindowTitle("FAQ")
-        faq_layout = QVBoxLayout()
-
-        for entry in faqs:
-            question = entry.get("question", "Question")
-            answer = entry.get("answer", "Answer")
-            btn = QPushButton(question)
-            btn.clicked.connect(lambda _, q=question, a=answer: QMessageBox.information(self, q, a))
-            faq_layout.addWidget(btn)
-
-        close_btn = QPushButton("Close")
-        close_btn.setStyleSheet("font-weight: bold;")
-        close_btn.clicked.connect(self.faq_dialog.close)
-        faq_layout.addWidget(close_btn)
-
-        self.faq_dialog.setLayout(faq_layout)
-        self.faq_dialog.setFixedWidth(400)
+        self.faq_dialog = FAQDialog(self)
         self.faq_dialog.show()
-
         self.faq_dialog.destroyed.connect(lambda: setattr(self, "faq_dialog", None))
 
+    def show_settings(self):
+        if self.settings_dialog is not None and self.settings_dialog.isVisible():
+            self.settings_dialog.raise_()
+            self.settings_dialog.activateWindow()
+            return
+        self.settings_dialog = SettingsDialog(self, self.settings)
+        self.settings_dialog.show()
+        self.settings_dialog.destroyed.connect(lambda: setattr(self, "settings_dialog", None))
+
+    def show_context_menu(self, pos):
+        # lol help from chatgpt
+        index = self.table.indexAt(pos)
+        if not index.isValid():
+            return
+
+        menu = QtWidgets.QMenu(self)
+        delete_action = menu.addAction("Delete Account")
+        insert_action = menu.addAction("Insert Account")
+
+        action = menu.exec_(self.table.viewport().mapToGlobal(pos))
+        if action == delete_action:
+            self.table.removeRow(index.row())
+        elif action == insert_action:
+            self.table.insertRow(index.row() + 1)
+            self.add_launch_button(index.row() + 1)
+
+    def mark_unsaved(self, *args, **kwargs):
+        self.unsaved_changes = True
+
     def add_launch_button(self, row):
-        def new_launch_nonblocking(row):
+        def safe_launch_unblocking(row):
             if self.table.item(row, 1):
-                launch_nonblocking(self.table.item(row, 1).text())
+                launch_nonblocking(
+                    self.table.item(row, 1).text(),
+                    self.settings.data.get("launch_url", {}).get("value", "https://roblox.com/home"),
+                    self.settings.data.get("launch_confirmation", {}).get("value", True),
+                )
             else:
-                QMessageBox.warning(self, "Error", "Token cannot be empty.")
+                QMessageBox.warning(self, "Error", "Please enter a valisd token.")
 
         launch_btn = QPushButton("Launch")
-        launch_btn.clicked.connect(lambda _, r=row: new_launch_nonblocking(r))
+        launch_btn.clicked.connect(lambda _, r=row: safe_launch_unblocking(r))
         self.table.setCellWidget(row, 2, launch_btn)
 
     def add_account(self):
@@ -243,7 +368,6 @@ class AccountManagerWidget(QWidget):
                 self.table.insertRow(row)
                 self.table.setItem(row, 0, QTableWidgetItem(entry.get("name", "")))
                 self.table.setItem(row, 1, QTableWidgetItem(entry.get("token", "")))
-
                 self.add_launch_button(row)
             self.unsaved_changes = False
         except InvalidToken:
@@ -252,22 +376,28 @@ class AccountManagerWidget(QWidget):
             QMessageBox.critical(self, "Error", f"Failed to load tokens: {e}")
 
     def launch_all(self):
-        # launch all accounts
+        # Launch all accounts (skip over empty tokens)
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
             for row in range(self.table.rowCount()):
                 token_item = self.table.item(row, 1)
                 if token_item:
-                    roblosecurity = token_item.text()
-                    if roblosecurity:
-                        launch_nonblocking(roblosecurity)
+                    launch_nonblocking(
+                        token_item.text(),
+                        self.settings.data.get("launch_url", {}).get("value", "https://roblox.com/home"),
+                        self.settings.data.get("launch_confirmation", {}).get("value", True),
+                    )  # Launch in non-blocking mode
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to launch: {e}")
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
 
 
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Roblox Account Manager (v0.1)")
+        self.setWindowTitle("Roblox Account Manager (v0.3)")
+        self.setWindowIcon(QtGui.QIcon("icon.png"))
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
         self.login_widget = LoginWidget()
@@ -281,8 +411,16 @@ class MainWindow(QWidget):
         self.manager_widget = AccountManagerWidget(password)
         self.layout.addWidget(self.manager_widget)
 
+        self.setMinimumSize(400, 200)
+        self.resize(600, 300)
+
     def closeEvent(self, event):
-        if hasattr(self, "manager_widget") and self.manager_widget.unsaved_changes:
+        # Unsaved changes check
+        if (
+            hasattr(self, "manager_widget")
+            and self.manager_widget.unsaved_changes
+            and self.manager_widget.settings.data.get("save_reminder", {}).get("value", True)
+        ):
             reply = QMessageBox.question(
                 self,
                 "Unsaved Changes",
@@ -302,7 +440,15 @@ class MainWindow(QWidget):
 
 
 if __name__ == "__main__":
+    # What's new:
+    # - Refactored faq dialog
+    # - Made settings actually work! (Oops...)
+    # - Added error message in the selenium if token is invalid
+    # - Fixed small bugs
+    # - New setting to directly load to a page or launch a game
+
     app = QApplication(sys.argv)
     window = MainWindow()
+
     window.show()
     sys.exit(app.exec_())

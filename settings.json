@@ -1,0 +1,17 @@
+{
+  "launch_confirmation": {
+    "label": "Show message when successfully launched Roblox",
+    "value": true,
+    "type": "bool"
+  },
+  "Launch url": {
+    "label": "The default URL to go to when launching accounts",
+    "value": "",
+    "type": "string"
+  },
+  "save_reminder": {
+    "label": "Show reminder to save changes",
+    "value": true,
+    "type": "bool"
+  }
+}

@@ -1,0 +1,34 @@
+[
+  {
+    "question": "What is this app for?",
+    "answer": "This app has multiple features.\nFirst of all, this app allows multi-instancing roblox accounts, which allows you to run multiple Roblox accounts at once, on the same computer!\nThis app also is useful for managing multiple Roblox accounts easily by storing their tokens securely and launching them without having to log out and back in again."
+  },
+  {
+    "question": "How do I use this app?",
+    "answer": "1. Make a password and login.\n2. Click 'Add Account'.\n3. Enter your .ROBLOSECURITY token in the Token field (see 'How do I get my .ROBLOSECURITY Token?').\n4. Enter an Account Name (optional).\n5. Repeat steps 2-4 for each account you want to add.\n6. Click 'Launch All' to start all accounts or 'Launch' to start a specific account."
+  },
+  {
+    "question": "What is a .ROBLOSECURITY Token?",
+    "answer": "A .ROBLOSECURITY token is a cookie that allows you to log into your Roblox account without entering your username and password every time. It is stored in your browser when you log in to Roblox."
+  },
+  {
+    "question": "How do I get my .ROBLOSECURITY Token?",
+    "answer": "1. Open Roblox in your browser and log in.\n2. Open your browser's developer tools (F12 or right-click > Inspect).\n3. Go to the 'Application' (Chrome) or 'Storage' (Firefox) tab (the tabs are on top).\n4. Find 'Cookies' in the left column, open the dropdown, and select 'roblox.com'.\n5. Copy the value of the '.ROBLOSECURITY' cookie.\n6. Paste it into the Token field.\n7. DO NOT SHARE YOUR TOKEN WITH ANYBODY."
+  },
+  {
+    "question": "What Account Name do I use?",
+    "answer": "Account Name is just a label for your account. You can choose any name you like (or leave it blank)."
+  },
+  {
+    "question": "Is this app safe to use?",
+    "answer": "Yes, this app is safe to use. It doesn't send your tokens anywhere, is open source, and uses argon2 to protect your data."
+  },
+  {
+    "question": "What does 'Launch All' do?",
+    "answer": "'Launch All' will start a Roblox instance for each account/token listed in the table."
+  },
+  {
+    "question": "How do I reset my password?",
+    "answer": "To reset your password, delete both 'pwd.txt' and 'tokens.txt' in the app folder. You will need to re-enter your accounts."
+  }
+]
